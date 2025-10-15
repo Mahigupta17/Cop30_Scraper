@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string
+from flask import Flask, render_template_string, request # <--- THE FIX IS HERE
 import subprocess
 import os
 import threading
@@ -51,32 +51,31 @@ def run_scraper():
     """Runs the Scrapy crawl command in a subprocess."""
     print("--- Starting Scrapy Process ---")
     try:
-        # --- *** THE FINAL FIX IS HERE *** ---
-        # We must create a new environment for the subprocess and pass our secrets to it.
-        
-        # 1. Copy the current environment from the web server.
+        # Create a new environment for the subprocess and pass our secrets to it.
         proc_env = os.environ.copy()
         
-        # 2. Tell the subprocess where to find the credentials file.
-        #    Render automatically places secret files at '/etc/secrets/'.
+        # Tell the subprocess where to find the credentials file.
+        # Render automatically places secret files at '/etc/secrets/'.
         proc_env["GOOGLE_APPLICATION_CREDENTIALS"] = "/etc/secrets/credentials.json"
         
-        # 3. Run the scraper command with the correct environment.
-        subprocess.run(
+        # Run the scraper command with the correct environment
+        result = subprocess.run(
             ["scrapy", "crawl", "unfccc_events"], 
             check=True, 
             capture_output=True, 
             text=True,
-            env=proc_env # Pass the modified environment
+            env=proc_env
         )
         print("--- Scrapy Process Finished Successfully ---")
+        print(f"Stdout: {result.stdout}")
+        print(f"Stderr: {result.stderr}")
     except subprocess.CalledProcessError as e:
         print("--- Scrapy Process Failed ---")
         print(f"Return Code: {e.returncode}")
         print(f"Stdout: {e.stdout}")
         print(f"Stderr: {e.stderr}")
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        print(f"An unexpected error occurred while running the scraper: {e}")
 
 @app.route("/", methods=['GET', 'POST'])
 def index():
@@ -88,4 +87,6 @@ def index():
     return render_template_string(HTML_TEMPLATE)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    # The port is set by Render's environment, defaulting to 8080 for local testing
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
