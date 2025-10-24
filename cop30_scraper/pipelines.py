@@ -2,6 +2,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import os
 from datetime import datetime
+import pytz
 
 class GoogleSheetsPipeline:
     def __init__(self):
@@ -22,8 +23,11 @@ class GoogleSheetsPipeline:
 
         self.sheet = self.client.open_by_key(self.spreadsheet_id).worksheet(self.sheet_name)
         
-        # Track when scraping session started
-        self.session_start = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Set timezone to Indian Standard Time
+        self.ist = pytz.timezone('Asia/Kolkata')
+        
+        # Track when scraping session started (in IST)
+        self.session_start = datetime.now(self.ist).strftime("%Y-%m-%d %H:%M:%S")
         self.items_scraped = 0
         
         # Add headers if sheet is empty
@@ -31,7 +35,7 @@ class GoogleSheetsPipeline:
             if not self.sheet.get('A1:F1'):
                 headers = ["Scraped At", "Scheduled", "Time/Location", "Organizer", "Tags", "Title/Theme/Speakers"]
                 self.sheet.append_row(headers)
-                # Format header row (optional but looks nice)
+                # Format header row
                 self.sheet.format('A1:F1', {
                     "backgroundColor": {"red": 0.4, "green": 0.5, "blue": 0.9},
                     "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
@@ -43,7 +47,7 @@ class GoogleSheetsPipeline:
     def process_item(self, item, spider):
         """
         Write item to Google Sheets with 6 columns:
-        A: Scraped At (timestamp)
+        A: Scraped At (timestamp in IST)
         B: Scheduled
         C: Time_Location
         D: Organizer
@@ -51,8 +55,8 @@ class GoogleSheetsPipeline:
         F: Title_Theme_Speakers (combined formatted text)
         """
         
-        # Get current timestamp
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Get current timestamp in IST
+        timestamp = datetime.now(self.ist).strftime("%Y-%m-%d %H:%M:%S")
         
         # Extract the combined Title/Theme/Speakers data
         tts_data = item.get("Title_Theme_Speakers", {})
@@ -63,9 +67,9 @@ class GoogleSheetsPipeline:
         # Format as combined text with line breaks for column F
         formatted_tts = f"Title: {title}\n\nTheme: {theme}\n\nSpeakers: {speakers}"
 
-        # Build row with 6 columns (timestamp in A, rest shifted right)
+        # Build row with 6 columns
         row = [
-            timestamp,                           # Column A - Scraped At
+            timestamp,                           # Column A - Scraped At (IST)
             item.get("Scheduled", "N/A"),        # Column B - Date
             item.get("Time_Location", "N/A"),    # Column C - Time & Location
             item.get("Organizer", "N/A"),        # Column D - URL
@@ -76,7 +80,7 @@ class GoogleSheetsPipeline:
         # Debug logging
         spider.logger.info("=" * 70)
         spider.logger.info(f"Writing to Google Sheets:")
-        spider.logger.info(f"  Column A (Scraped At): '{timestamp}'")
+        spider.logger.info(f"  Column A (Scraped At IST): '{timestamp}'")
         spider.logger.info(f"  Column B (Scheduled): '{row[1]}'")
         spider.logger.info(f"  Column C (Time/Location): '{row[2][:50]}...'")
         spider.logger.info(f"  Column D (Organizer): '{row[3][:50]}...'")
@@ -90,13 +94,8 @@ class GoogleSheetsPipeline:
         # Get the row number that was just added
         row_number = len(self.sheet.get_all_values())
         
-        # Highlight the new row in light green
+        # Set text wrapping for the Title/Theme/Speakers column (NO GREEN BACKGROUND)
         try:
-            self.sheet.format(f'A{row_number}:F{row_number}', {
-                "backgroundColor": {"red": 0.85, "green": 0.95, "blue": 0.85}
-            })
-            
-            # Set text wrapping for the Title/Theme/Speakers column
             self.sheet.format(f'F{row_number}', {
                 "wrapStrategy": "WRAP"
             })
@@ -112,10 +111,13 @@ class GoogleSheetsPipeline:
         Called when spider closes - add a separator row to mark end of scraping session
         """
         try:
-            # Add a separator row with bold green background
-            session_end = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            separator_text = f"═══ SCRAPING SESSION COMPLETED ═══"
-            summary_text = f"Session: {self.session_start} to {session_end} | Events Found: {self.items_scraped}"
+            # Get current time in IST
+            session_end = datetime.now(self.ist).strftime("%Y-%m-%d %H:%M:%S")
+            session_date = datetime.now(self.ist).strftime("%Y-%m-%d")
+            
+            # Create separator message
+            separator_text = f"═══ SCRAPING SESSION COMPLETED on {session_date} ═══"
+            summary_text = f"Started: {self.session_start} | Ended: {session_end} | Events Found: {self.items_scraped}"
             
             separator_row = [
                 separator_text,
@@ -131,7 +133,7 @@ class GoogleSheetsPipeline:
             # Get the separator row number
             row_number = len(self.sheet.get_all_values())
             
-            # Format the separator row with bright green background and bold text
+            # Format the separator row with bright green background and bold white text
             self.sheet.format(f'A{row_number}:F{row_number}', {
                 "backgroundColor": {"red": 0.2, "green": 0.8, "blue": 0.2},
                 "textFormat": {
@@ -148,6 +150,7 @@ class GoogleSheetsPipeline:
             spider.logger.info("=" * 80)
             spider.logger.info(f"✅ Added separator row at row {row_number}")
             spider.logger.info(f"📊 Scraping session complete: {self.items_scraped} events added")
+            spider.logger.info(f"🕐 Session ended at: {session_end} IST")
             spider.logger.info("=" * 80)
             
         except Exception as e:
