@@ -1,9 +1,0 @@
-scrapy
-scrapy-playwright
-gspread
-google-auth-oauthlib
-google-generativeai
-flask
-pytz
-pandas
-openpyxl
