@@ -472,6 +472,7 @@ def run_scraper_background():
         # Pass configuration to scraper
         env["SCRAPER_URLS"] = ",".join(scraper_config["urls"])
         env["SCRAPER_COLUMNS"] = ",".join(scraper_config["format_columns"])
+        env["SCRAPER_LIST_NAME"] = scraper_config.get("list_name", "MVP_Tools_Data")
         
         print(f"🔑 Credentials: {creds_path}")
         print(f"🔗 URLs to scrape: {len(scraper_config['urls'])}")
@@ -529,7 +530,7 @@ def trigger():
     
     try:
         # Get configuration
-        list_name = request.form.get('list_name')
+        list_name = request.form.get('list_name', 'MVP_Tools_Data')
         urls_json = request.form.get('urls')
         format_file = request.files.get('format_file')
         
@@ -537,13 +538,71 @@ def trigger():
         import json
         urls = json.loads(urls_json)
         scraper_config["urls"] = urls
+        scraper_config["list_name"] = list_name
         
-        # Parse format file to get column names
+        # Parse format file (Excel or CSV)
         if format_file:
-            content = format_file.read().decode('utf-8')
-            csv_reader = csv.reader(io.StringIO(content))
-            headers = next(csv_reader)
-            scraper_config["format_columns"] = headers
+            filename = format_file.filename.lower()
+            
+            if filename.endswith('.csv'):
+                # Handle CSV with multiple encoding attempts
+                try:
+                    # Try UTF-8 first
+                    content = format_file.read().decode('utf-8')
+                except UnicodeDecodeError:
+                    # Try latin-1 if UTF-8 fails
+                    format_file.seek(0)
+                    try:
+                        content = format_file.read().decode('latin-1')
+                    except:
+                        # Last resort: ignore errors
+                        format_file.seek(0)
+                        content = format_file.read().decode('utf-8', errors='ignore')
+                
+                csv_reader = csv.reader(io.StringIO(content))
+                headers = next(csv_reader)
+                scraper_config["format_columns"] = headers
+                
+            elif filename.endswith(('.xlsx', '.xls')):
+                # Handle Excel - pandas handles encoding automatically
+                try:
+                    # Save uploaded file temporarily
+                    format_file.seek(0)
+                    temp_path = '/tmp/upload_format.xlsx'
+                    format_file.save(temp_path)
+                    
+                    # Read Excel file with pandas
+                    df = pd.read_excel(temp_path, nrows=1, engine='openpyxl')
+                    headers = df.columns.tolist()
+                    scraper_config["format_columns"] = headers
+                    
+                    # Clean up temp file
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                    
+                    print(f"✅ Extracted columns from Excel: {headers}")
+                except Exception as e:
+                    print(f"❌ Excel parsing error: {e}")
+                    # Clean up temp file on error
+                    if os.path.exists('/tmp/upload_format.xlsx'):
+                        os.remove('/tmp/upload_format.xlsx')
+                    return jsonify({
+                        "status": "error",
+                        "message": f"Failed to parse Excel file: {str(e)}"
+                    }), 400
+            else:
+                return jsonify({
+                    "status": "error",
+                    "message": "Please upload CSV or Excel file (.csv, .xlsx, .xls)"
+                }), 400
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "No format file provided"
+            }), 400
+        
+        print(f"📋 Format columns: {scraper_config['format_columns']}")
+        print(f"🔗 URLs to scrape: {len(urls)}")
         
         # Start scraper
         thread = threading.Thread(target=run_scraper_background, daemon=True)
@@ -551,10 +610,13 @@ def trigger():
         
         return jsonify({
             "status": "started",
-            "message": f"Scraper started for {len(urls)} URLs"
+            "message": f"Scraper started for {len(urls)} URLs with {len(scraper_config['format_columns'])} columns"
         }), 200
         
     except Exception as e:
+        print(f"❌ Trigger error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             "status": "error",
             "message": str(e)
@@ -572,7 +634,6 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     print(f"🌐 MVP Testing Scraper starting on port {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
-
 
 
 
