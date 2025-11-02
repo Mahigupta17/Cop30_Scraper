@@ -111,20 +111,25 @@ class DynamicMVPSpider(scrapy.Spider):
     async def parse_website(self, response):
         """Parse each website using AI based on format template"""
         page = response.meta["playwright_page"]
+        url = response.url
+        
+        self.logger.info(f"=" * 80)
+        self.logger.info(f"🔍 STARTING SCRAPE: {url}")
+        self.logger.info(f"=" * 80)
         
         try:
-            self.logger.info(f"🔍 Scraping: {response.url}")
-            
             # Wait longer for page to fully load
-            await page.wait_for_timeout(5000)  # Increased from 3s to 5s
+            await page.wait_for_timeout(5000)
             
             # Try to wait for main content
             try:
                 await page.wait_for_selector('body', timeout=10000)
-            except:
-                self.logger.warning(f"Body selector timeout for {response.url}")
+                self.logger.info(f"✅ Body loaded for {url}")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Body selector timeout for {url}: {e}")
             
             # Scroll page to trigger lazy loading
+            self.logger.info(f"📜 Scrolling page: {url}")
             await page.evaluate('''async () => {
                 await new Promise(resolve => {
                     let scrollHeight = document.body.scrollHeight;
@@ -145,17 +150,16 @@ class DynamicMVPSpider(scrapy.Spider):
                 });
             }''')
             
-            await page.wait_for_timeout(2000)  # Wait after scrolling
+            await page.wait_for_timeout(2000)
             
             # Get page content with better extraction
+            self.logger.info(f"📄 Extracting content from: {url}")
             page_text = await page.evaluate('''() => {
-                // Remove unwanted elements
                 const unwanted = document.querySelectorAll(
                     'script, style, nav, header, footer, .cookie-banner, .modal, iframe, noscript'
                 );
                 unwanted.forEach(el => el.remove());
                 
-                // Get main content - try multiple selectors
                 let main = document.querySelector('main');
                 if (!main) main = document.querySelector('[role="main"]');
                 if (!main) main = document.querySelector('.main-content');
@@ -165,31 +169,35 @@ class DynamicMVPSpider(scrapy.Spider):
                 return main.innerText;
             }''')
             
-            # Get page title
             page_title = await page.title()
-            
-            # Get meta description as additional context
             meta_description = await page.evaluate('''() => {
                 const meta = document.querySelector('meta[name="description"]');
                 return meta ? meta.content : '';
             }''')
             
-            # Clean and limit text
+            # Clean text
             page_text = re.sub(r'\s+', ' ', page_text).strip()
             
-            # If page text is too short, site might be blocking us
+            self.logger.info(f"📊 Content stats for {url}:")
+            self.logger.info(f"  - Title: {page_title}")
+            self.logger.info(f"  - Content length: {len(page_text)} chars")
+            self.logger.info(f"  - First 200 chars: {page_text[:200]}")
+            
+            # Check if content is sufficient
             if len(page_text) < 100:
-                self.logger.warning(f"⚠️ Very little content extracted from {response.url} (only {len(page_text)} chars)")
-                self.logger.warning(f"This might be due to anti-bot protection or JavaScript issues")
+                self.logger.error(f"❌ Insufficient content from {url} (only {len(page_text)} chars)")
+                self.logger.error(f"This site may be blocking automated access")
+                self.failed_count += 1
+                yield self.create_fallback_item(url, f"Insufficient content ({len(page_text)} chars) - possible bot detection")
+                return
             
-            page_text = page_text[:20000]  # Limit to 20k chars
-            
-            # Combine all context
+            page_text = page_text[:20000]
             full_context = f"{page_title}\n{meta_description}\n{page_text}"
             
-            # Extract structured data using Gemini
+            # Extract with Gemini
+            self.logger.info(f"🤖 Sending to Gemini for extraction: {url}")
             extracted_data = await self.extract_with_gemini(
-                response.url,
+                url,
                 page_title,
                 full_context,
                 self.format_columns
@@ -197,19 +205,33 @@ class DynamicMVPSpider(scrapy.Spider):
             
             if extracted_data:
                 self.scraped_count += 1
-                self.logger.info(f"✅ Successfully scraped {response.url} ({self.scraped_count}/{len(self.urls_to_scrape)})")
+                self.logger.info(f"=" * 80)
+                self.logger.info(f"✅ SUCCESS ({self.scraped_count}/{len(self.urls_to_scrape)}): {url}")
+                self.logger.info(f"=" * 80)
                 yield extracted_data
             else:
                 self.failed_count += 1
-                self.logger.error(f"❌ Failed to extract data from {response.url}")
-                yield self.create_fallback_item(response.url, "Extraction failed")
+                self.logger.error(f"=" * 80)
+                self.logger.error(f"❌ FAILED ({self.failed_count}/{len(self.urls_to_scrape)}): {url}")
+                self.logger.error(f"=" * 80)
+                yield self.create_fallback_item(url, "Gemini extraction returned None")
                 
         except Exception as e:
-            self.logger.error(f"❌ Error scraping {response.url}: {e}")
+            self.logger.error(f"=" * 80)
+            self.logger.error(f"❌ EXCEPTION for {url}: {type(e).__name__}")
+            self.logger.error(f"Error: {str(e)}")
+            import traceback
+            self.logger.error(f"Traceback:\n{traceback.format_exc()}")
+            self.logger.error(f"=" * 80)
+            
             self.failed_count += 1
-            yield self.create_fallback_item(response.url, str(e))
+            yield self.create_fallback_item(url, f"{type(e).__name__}: {str(e)}")
         finally:
-            await page.close()
+            try:
+                await page.close()
+                self.logger.info(f"🔒 Page closed for {url}")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Error closing page for {url}: {e}")
     
     async def extract_with_gemini(self, url, page_title, content, columns):
         """Use Gemini to extract data based on user-defined format columns"""
@@ -320,7 +342,6 @@ Do not include any explanations, only the JSON object."""
         if len(self.urls_to_scrape) > 0:
             self.logger.info(f"Success rate: {(self.scraped_count/len(self.urls_to_scrape)*100):.1f}%")
         self.logger.info("=" * 80)
-
 
 
 
