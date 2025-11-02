@@ -47,17 +47,33 @@ class DynamicMVPSpider(scrapy.Spider):
     def get_urls_from_env(self):
         """Get URLs from environment variable"""
         urls_str = os.getenv("SCRAPER_URLS", "")
+        self.logger.info(f"🔍 Reading SCRAPER_URLS from environment")
+        self.logger.info(f"📝 Raw value: {urls_str[:200] if urls_str else 'EMPTY'}")
+        
         if urls_str:
             urls = [url.strip() for url in urls_str.split(",") if url.strip()]
+            self.logger.info(f"✅ Parsed {len(urls)} URLs from environment")
+            for i, url in enumerate(urls, 1):
+                self.logger.info(f"  {i}. {url}")
             return urls
+        
+        self.logger.error("❌ No URLs found in SCRAPER_URLS environment variable!")
         return []
     
     def get_format_from_env(self):
         """Get format columns from environment variable"""
         columns_str = os.getenv("SCRAPER_COLUMNS", "")
+        self.logger.info(f"🔍 Reading SCRAPER_COLUMNS from environment")
+        self.logger.info(f"📝 Raw value: {columns_str[:200] if columns_str else 'EMPTY'}")
+        
         if columns_str:
             columns = [col.strip() for col in columns_str.split(",") if col.strip()]
+            self.logger.info(f"✅ Parsed {len(columns)} columns from environment")
+            for i, col in enumerate(columns, 1):
+                self.logger.info(f"  {i}. {col}")
             return columns
+        
+        self.logger.warning("⚠️ No columns found in SCRAPER_COLUMNS, using defaults")
         return ["Tool Name", "Description", "Pricing", "Features", "India Available"]
     
     def start_requests(self):
@@ -204,7 +220,7 @@ class DynamicMVPSpider(scrapy.Spider):
         
         try:
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-2.0-flash')
             
             # Build dynamic prompt based on format columns
             columns_description = "\n".join([f"- {col}: Extract information for this field" for col in columns])
@@ -304,7 +320,6 @@ Do not include any explanations, only the JSON object."""
         if len(self.urls_to_scrape) > 0:
             self.logger.info(f"Success rate: {(self.scraped_count/len(self.urls_to_scrape)*100):.1f}%")
         self.logger.info("=" * 80)
-
 
 
 
